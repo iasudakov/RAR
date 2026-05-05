@@ -4,7 +4,7 @@ experiment:
     max_train_examples: 1_281_167
     save_every: 1_000
     eval_every: 50_000
-    generate_every: 5_000
+    generate_every: 1_000
     log_every: 50
     log_grad_norm_every: 1_000
     resume: True
@@ -71,7 +71,7 @@ training:
     per_gpu_batch_size: 64 # 32 GPU, total batch size 2048
     mixed_precision: "bf16"
     enable_tf32: True
-    enable_wandb: True
+    enable_wandb: False
     use_ema: False
     seed: 42
     max_train_steps: 250_000

@@ -43,6 +43,7 @@ from demo_util import get_titok_tokenizer, get_tatitok_tokenizer, sample_fn
 from imagenet_classes import imagenet_idx2classname
 from utils.viz_utils import make_viz_from_samples, make_viz_from_samples_generation, make_viz_from_samples_t2i_generation
 from torchinfo import summary
+import underdeep as U
 
 
 def get_config():
@@ -865,7 +866,8 @@ def train_one_epoch_generator(
                     global_step + 1,
                     config.experiment.output_dir,
                     logger=logger,
-                    config=config
+                    config=config,
+                    run=run
                 )
 
                 if config.training.get("use_ema", False):
@@ -1139,8 +1141,8 @@ def reconstruct_images(model, original_images, fnames, accelerator,
 
 
 @torch.no_grad()
-def generate_images(model, tokenizer, accelerator, 
-                    global_step, output_dir, logger, config=None):
+def generate_images(model, tokenizer, accelerator,
+                    global_step, output_dir, logger, config=None, run=None):
     model.eval()
     tokenizer.eval()
     logger.info("Generating images...")
@@ -1159,21 +1161,25 @@ def generate_images(model, tokenizer, accelerator,
     images_for_saving, images_for_logging = make_viz_from_samples_generation(
         generated_image)
 
-    # Log images.
-    if config.training.enable_wandb:
-        accelerator.get_tracker("wandb").log_images(
-            {"Train Generated": [images_for_saving]}, step=global_step
-        )
-    else:
-        accelerator.get_tracker("tensorboard").log_images(
-            {"Train Generated": images_for_logging}, step=global_step
-        )
     # Log locally.
     root = Path(output_dir) / "train_generated_images"
     os.makedirs(root, exist_ok=True)
     filename = f"{global_step:08}_s-generated.png"
     path = os.path.join(root, filename)
     images_for_saving.save(path)
+
+    # Log images to tracker.
+    if config.training.enable_wandb:
+        accelerator.get_tracker("wandb").log_images(
+            {"Train Generated": [images_for_saving]}, step=global_step
+        )
+    else:
+        accelerator.get_tracker("tensorboard").log_images(
+            {"Train Generated": images_for_logging.unsqueeze(0)}, step=global_step
+        )
+
+    if run is not None:
+        run.log({"generated_images": U.UImage(value=path)}, step=global_step)
 
     model.train()
     return
