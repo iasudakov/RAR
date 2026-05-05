@@ -34,8 +34,8 @@ model:
         guidance_scale_pow: 2.75
         use_checkpoint: False # True to save memory
 
-        randomness_anneal_start: 125000 # 200 epoch
-        randomness_anneal_end: 187500 # 300 epoch
+        randomness_anneal_start: 250000 # 200 epoch
+        randomness_anneal_end: 250000 # 300 epoch
 
 dataset:
     params:
