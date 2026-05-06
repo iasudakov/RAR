@@ -87,7 +87,7 @@ def main():
         logger.info(f"Config:\n{OmegaConf.to_yaml(config)}")
 
         metadata_path = Path(output_dir) / "underdeep_metadata.pt"
-        client = U.Client(experiment="generative-models/rar")
+        client = U.Client(experiment="dbaranchuk/randar")
         if metadata_path.exists():
             run_uid = torch.load(metadata_path, weights_only=False).get("run_uid")
             run = client.resume_from(run_uid)
