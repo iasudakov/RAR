@@ -1273,11 +1273,8 @@ def save_checkpoint(model, output_dir, accelerator, global_step, logger) -> Path
     accelerator.save_state(last_path)
     if accelerator.is_main_process:
         json.dump({"global_step": global_step}, (last_path / "metadata.json").open("w+"))
-        try:
-            from yt_tools.nirvana_utils import copy_out_to_snapshot
-            copy_out_to_snapshot(output_dir)
-        except Exception:
-            pass
+        from yt_tools.nirvana_utils import copy_out_to_snapshot
+        copy_out_to_snapshot(output_dir)
 
     return save_path
 

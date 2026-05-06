@@ -2,7 +2,7 @@ experiment:
     project: "rar_generation"
     name: "rar-b"
     max_train_examples: 1_281_167
-    save_every: 1_000
+    save_every: 1_00
     eval_every: 50_000
     generate_every: 1_000
     log_every: 50
