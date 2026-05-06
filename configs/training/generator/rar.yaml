@@ -2,7 +2,7 @@ experiment:
     project: "rar_generation"
     name: "rar-b"
     max_train_examples: 1_281_167
-    save_every: 1_00
+    save_every: 1_000
     eval_every: 50_000
     generate_every: 1_000
     log_every: 50
@@ -67,7 +67,7 @@ lr_scheduler:
         end_lr: 1e-5
 
 training:
-    gradient_accumulation_steps: 4
+    gradient_accumulation_steps: 2
     per_gpu_batch_size: 64 # 32 GPU, total batch size 2048
     mixed_precision: "bf16"
     enable_tf32: True

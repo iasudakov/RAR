@@ -16,7 +16,10 @@ limitations under the License.
 """
 import math
 import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from accelerate.utils import set_seed
 from accelerate import Accelerator
