@@ -87,7 +87,7 @@ def main():
         logger.info(f"Config:\n{OmegaConf.to_yaml(config)}")
 
         metadata_path = Path(output_dir) / "underdeep_metadata.pt"
-        client = U.Client(experiment="dbaranchuk/randar")
+        client = U.Client(experiment="generative-models/rar")
         if metadata_path.exists():
             run_uid = torch.load(metadata_path, weights_only=False).get("run_uid")
             run = client.resume_from(run_uid)
@@ -102,11 +102,24 @@ def main():
         set_seed(config.training.seed, device_specific=True)
 
     if accelerator.local_process_index == 0:
-        # download the maskgit-vq tokenizer weight
         from huggingface_hub import hf_hub_download
-        hf_hub_download(repo_id="fun-research/TiTok", filename=f"{config.model.vq_model.pretrained_tokenizer_weight}", local_dir="./")
-        if not os.path.exists(config.dataset.params.pretokenization):
-            hf_hub_download(repo_id="yucornetto/RAR", filename=f"{config.dataset.params.pretokenization}", local_dir="./")
+        tokenizer_type = config.model.vq_model.get("type", "maskgit")
+        tokenizer_weight = config.model.vq_model.pretrained_tokenizer_weight
+        # Only auto-download the MaskGIT VQ weight (hosted on HF). For LlamaGen
+        # the checkpoint is expected to already be present at the given path.
+        if tokenizer_type == "maskgit" and not os.path.exists(tokenizer_weight):
+            hf_hub_download(
+                repo_id="fun-research/TiTok",
+                filename=f"{tokenizer_weight}",
+                local_dir="./",
+            )
+        pretoken = config.dataset.params.get("pretokenization", "")
+        if pretoken and not os.path.exists(pretoken):
+            hf_hub_download(
+                repo_id="yucornetto/RAR",
+                filename=f"{pretoken}",
+                local_dir="./",
+            )
     accelerator.wait_for_everyone()
 
     # get maskgit-vq tokenizer
@@ -132,14 +145,20 @@ def main():
 
     # Prepare everything with accelerator.
     logger.info("Preparing model, optimizer and dataloaders")
-    if config.dataset.params.get("pretokenization", ""):
-        model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(
-            model, optimizer, lr_scheduler, train_dataloader
-        )
-    else:
-        # The dataloader are already aware of distributed training, so we don't need to prepare them.
+    # WebDataset-based loaders manage distributed sampling themselves; the
+    # pretokenized-JSONL and the on-the-fly ImageFolder loaders rely on
+    # accelerate to shard the data across processes.
+    using_webdataset = (
+        not config.dataset.params.get("pretokenization", "")
+        and not config.dataset.params.get("data_path", "")
+    )
+    if using_webdataset:
         model, optimizer, lr_scheduler = accelerator.prepare(
             model, optimizer, lr_scheduler
+        )
+    else:
+        model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(
+            model, optimizer, lr_scheduler, train_dataloader
         )
     if config.training.use_ema:
         ema_model.to(accelerator.device)

@@ -1,0 +1,94 @@
+# RAR with on-the-fly tokenization (no pretokenized JSONL).
+# Uses ImageFolder + ADM-style crop augmentations (ported from yrRandAR).
+# Tokenizer is configurable: "maskgit" (default) or "llamagen".
+experiment:
+    project: "rar_generation"
+    name: "rar-b-onthefly"
+    max_train_examples: 1_281_167
+    save_every: 5_000
+    eval_every: 50_000
+    generate_every: 1_000
+    log_every: 50
+    log_grad_norm_every: 1_000
+    resume: True
+
+model:
+    vq_model:
+        # Select tokenizer: "maskgit" or "llamagen".
+        type: "maskgit"
+        codebook_size: 1024            # used by RAR generator; 1024 (maskgit) or 16384 (llamagen)
+        token_size: 256
+        num_latent_tokens: 256
+        finetune_decoder: False
+        pretrained_tokenizer_weight: "maskgit-vqgan-imagenet-f16-256.bin"
+        # When type == "llamagen", set these too:
+        # pretrained_tokenizer_weight: "/path/to/vq_ds16_c2i.pt"
+        # codebook_size: 16384
+        # codebook_embed_dim: 8
+        # z_channels: 256
+        # encoder_ch_mult: [1, 1, 2, 2, 4]
+        # decoder_ch_mult: [1, 1, 2, 2, 4]
+
+    generator:
+        hidden_size: 768
+        num_hidden_layers: 24
+        num_attention_heads: 16
+        intermediate_size: 3072
+        dropout: 0.1
+        attn_drop: 0.1
+        class_label_dropout: 0.1
+        image_seq_len: 256
+        condition_num_classes: 1000
+
+        randomize_temperature: 1.0
+        guidance_scale: 16.0
+        guidance_scale_pow: 2.75
+        use_checkpoint: False
+
+        randomness_anneal_start: 250000
+        randomness_anneal_end: 250000
+
+dataset:
+    params:
+        # Leave `pretokenization` empty to enable on-the-fly tokenization.
+        pretokenization: ""
+        # ImageFolder-style ImageNet directory (class subdirs under each path).
+        data_path: "/path/to/imagenet/train"
+        val_data_path: "/path/to/imagenet/val"
+        num_workers_per_gpu: 12
+        # Latent-noise augmentation strength (yrRandAR `noise_aug_t`).
+        # 0.0 disables noise augmentation. Typical values: 0.0 - 0.1.
+        noise_aug_t: 0.0
+    preprocessing:
+        resize_shorter_edge: 256
+        crop_size: 256
+        # When true, uses random_crop_arr (yrRandAR's random ADM crop) instead
+        # of center_crop_arr. random_flip is always enabled during training.
+        random_crop: True
+        random_flip: True
+
+optimizer:
+    name: adamw
+    params:
+        learning_rate: 4e-4
+        beta1: 0.9
+        beta2: 0.96
+        weight_decay: 0.03
+
+lr_scheduler:
+    scheduler: "cosine"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 62_500
+        end_lr: 1e-5
+
+training:
+    gradient_accumulation_steps: 4
+    per_gpu_batch_size: 64
+    mixed_precision: "bf16"
+    enable_tf32: True
+    enable_wandb: False
+    use_ema: False
+    seed: 42
+    max_train_steps: 250_000
+    max_grad_norm: 1.0

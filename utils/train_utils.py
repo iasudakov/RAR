@@ -25,14 +25,15 @@ import glob
 from collections import defaultdict
 import open_clip
 
-from data import SimpleImageDataset, PretoeknizedDataSetJSONL
+from data import SimpleImageDataset, PretoeknizedDataSetJSONL, build_image_folder
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 from omegaconf import OmegaConf
 from torch.optim import AdamW
 from utils.lr_schedulers import get_scheduler
 from modeling.modules import EMAModel, ReconstructionLoss_Stage1, ReconstructionLoss_Stage2, ReconstructionLoss_Single_Stage, MLMLoss, ARLoss
 from modeling.titok import TiTok, PretrainedTokenizer
+from modeling.pretrained_tokenizer import build_pretrained_tokenizer
 from modeling.tatitok import TATiTok
 from modeling.maskgit import ImageBert, UViTBert
 from modeling.rar import RAR
@@ -80,13 +81,19 @@ class AverageMeter(object):
 
 
 def create_pretrained_tokenizer(config, accelerator=None):
-    if config.model.vq_model.finetune_decoder:
-        # No need of pretrained tokenizer at stage2
-        pretrianed_tokenizer = None
-    else:
-        pretrianed_tokenizer = PretrainedTokenizer(config.model.vq_model.pretrained_tokenizer_weight)
-        if accelerator is not None:
-            pretrianed_tokenizer.to(accelerator.device)
+    """Create the pretrained image tokenizer.
+
+    The tokenizer type is selected by `config.model.vq_model.type`:
+      - "maskgit" (default): MaskGIT-VQ, 1024 codes, images in [0, 1].
+      - "llamagen":          LlamaGen VQ, 16384 codes, images in [-1, 1].
+
+    Both expose `.encode(images, t=...)` for on-the-fly noise-augmented
+    tokenization (the `t` parameter mixes Gaussian noise into the encoder
+    latent, matching yrRandAR's `noise_aug_t`).
+    """
+    pretrianed_tokenizer = build_pretrained_tokenizer(config)
+    if pretrianed_tokenizer is not None and accelerator is not None:
+        pretrianed_tokenizer.to(accelerator.device)
     return pretrianed_tokenizer
 
 
@@ -349,16 +356,57 @@ def create_dataloader(config, logger, accelerator):
             res_ratio_filtering=preproc_config.get("res_ratio_filtering", False),
         )
         train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
-    # potentially, use a pretokenized dataset for ImageNet speed-up.
-    else:
-        if dataset_config.get("pretokenization", ""):
-            train_dataloader = DataLoader(
-                PretoeknizedDataSetJSONL(dataset_config.pretokenization),
+    # On-the-fly tokenization from a local ImageFolder (ImageNet-style layout).
+    # Triggered when pretokenization is empty and `dataset.params.data_path` is set.
+    # The dataloader is later sharded across processes by `accelerator.prepare`.
+    elif dataset_config.get("data_path", ""):
+        tokenizer_type = config.model.vq_model.get("type", "maskgit")
+        image_size = preproc_config.crop_size
+        random_crop = preproc_config.get("random_crop", False)
+        num_workers = dataset_config.get("num_workers_per_gpu", 8)
+
+        train_dataset = build_image_folder(
+            data_path=dataset_config.data_path,
+            image_size=image_size,
+            tokenizer_type=tokenizer_type,
+            is_train=True,
+            random_crop=random_crop,
+        )
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=config.training.per_gpu_batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=True,
+            persistent_workers=num_workers > 0,
+        )
+        train_dataloader.num_batches = math.ceil(
+            config.experiment.max_train_examples / total_batch_size_without_accum)
+
+        if dataset_config.get("val_data_path", ""):
+            eval_dataset = build_image_folder(
+                data_path=dataset_config.val_data_path,
+                image_size=image_size,
+                tokenizer_type=tokenizer_type,
+                is_train=False,
+                random_crop=False,
+            )
+            eval_dataloader = DataLoader(
+                eval_dataset,
                 batch_size=config.training.per_gpu_batch_size,
-                shuffle=True, drop_last=True, pin_memory=True)
-            train_dataloader.num_batches = math.ceil(
-                config.experiment.max_train_examples / total_batch_size_without_accum)
-    
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=True,
+                drop_last=False,
+            )
+        else:
+            eval_dataloader = None
+    else:
+        raise ValueError(
+            "create_dataloader: neither `pretokenization` nor `data_path` is set in dataset.params."
+        )
+
     return train_dataloader, eval_dataloader
 
 
@@ -751,10 +799,15 @@ def train_one_epoch_generator(
                     accelerator.device, memory_format=torch.contiguous_format, non_blocking=True
                 )
 
-                # Encode images on the flight.
+                # Encode images on the fly. The `noise_aug_t` controls Gaussian
+                # noise injection in the encoder latent (yrRandAR-style aug).
+                noise_aug_t = float(
+                    config.dataset.params.get("noise_aug_t", 0.0)
+                )
                 with torch.no_grad():
                     tokenizer.eval()
-                    input_tokens = tokenizer.encode(images)[1]["min_encoding_indices"].reshape(images.shape[0], -1)
+                    input_tokens = tokenizer.encode(images, t=noise_aug_t)
+                    input_tokens = input_tokens.reshape(images.shape[0], -1)
             else:
                 raise ValueError(f"Not found valid keys: {batch.keys()}")
 
